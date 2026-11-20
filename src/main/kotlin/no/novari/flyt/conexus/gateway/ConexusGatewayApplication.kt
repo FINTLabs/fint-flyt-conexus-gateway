@@ -1,11 +1,11 @@
-package no.novari.flyt
+package no.novari.flyt.conexus.gateway
 
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 
 @SpringBootApplication(scanBasePackages = ["no.novari"])
-class Application
+class ConexusGatewayApplication
 
 fun main(args: Array<String>) {
-    runApplication<Application>(*args)
+    runApplication<ConexusGatewayApplication>(*args)
 }

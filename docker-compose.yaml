@@ -1,9 +1,9 @@
-name: fint-flyt-gateway-template
+name: fint-flyt-conexus-gateway
 
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: fint-flyt-gateway-template-postgres
+    container_name: fint-flyt-conexus-gateway-postgres
     ports:
       - "5432:5432"
     environment:
@@ -22,7 +22,7 @@ services:
 
   kafka:
     image: apache/kafka:3.9.2
-    container_name: fint-flyt-gateway-template-kafka
+    container_name: fint-flyt-conexus-gateway-kafka
     ports:
       - "9092:9092"
     environment:
@@ -51,7 +51,7 @@ services:
 
   kafdrop:
     image: obsidiandynamics/kafdrop:4.2.0
-    container_name: fint-flyt-gateway-template-kafdrop
+    container_name: fint-flyt-conexus-gateway-kafdrop
     profiles:
       - tools
     depends_on:
