@@ -1,4 +1,4 @@
-FROM gcr.io/distroless/java25:nonroot@sha256:1c4ced761d17961c900cba60c33c8c3c46edbdadaa9d5ef9806eb5a6824fd406
+FROM gcr.io/distroless/java25:nonroot@sha256:02ba64d87d0371be011404245a1ad4aeaa94d8264732a795b64dcd5bf036b116
 ENV TZ="Europe/Oslo"
 ENV JAVA_TOOL_OPTIONS=-XX:+ExitOnOutOfMemoryError
 WORKDIR /app
