@@ -78,6 +78,7 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-reflect")
 
     implementation("no.novari:flyt-gateway-starter:5.0.0")
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-api:2.10.0")
 
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
     // Pinned to 8.x: 9.x pulls in Jackson 3 (tools.jackson), while Spring Boot 3.5 uses Jackson 2
