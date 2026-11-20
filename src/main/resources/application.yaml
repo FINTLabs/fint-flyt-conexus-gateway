@@ -23,3 +23,8 @@ spring:
     output:
         ansi:
             enabled: always
+
+springdoc:
+    paths-to-match: /api/conexus/**
+    api-docs:
+        path: /api/conexus/v3/api-docs
