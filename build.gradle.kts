@@ -1,0 +1,115 @@
+import com.github.benmanes.gradle.versions.updates.DependencyUpdatesTask
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
+buildscript {
+    repositories {
+        gradlePluginPortal()
+    }
+    dependencies {
+        classpath(platform("com.fasterxml.jackson:jackson-bom:2.23.0"))
+        constraints {
+            classpath("org.apache.httpcomponents.client5:httpclient5:5.6.5")
+            classpath("org.apache.httpcomponents.core5:httpcore5:5.4.4")
+            classpath("org.apache.httpcomponents.core5:httpcore5-h2:5.4.4")
+            classpath("org.apache.commons:commons-lang3:3.22.0")
+        }
+    }
+}
+
+plugins {
+    id("org.springframework.boot") version "3.5.16"
+    id("io.spring.dependency-management") version "1.1.7"
+    kotlin("jvm") version "2.4.10"
+    kotlin("plugin.spring") version "2.4.10"
+    id("org.jlleitschuh.gradle.ktlint") version "14.2.0"
+    id("io.github.ben-manes.versions") version "0.67.0"
+}
+
+group = "no.novari"
+version = "0.0.1-SNAPSHOT"
+
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(25))
+    }
+}
+
+// Dependabot resolves with JDK 21; an explicit release keeps JVM 25 as the resolution target so gradle.lockfile gets updated.
+tasks.withType<JavaCompile>().configureEach {
+    options.release.set(25)
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        url = uri("https://repo.fintlabs.no/releases")
+    }
+    mavenLocal()
+}
+
+tasks.jar {
+    isEnabled = false
+}
+
+extra["httpclient5.version"] = "5.6.3"
+extra["httpcore5.version"] = "5.4.4"
+extra["jackson-bom.version"] = "2.21.7"
+extra["log4j2.version"] = "2.25.5"
+extra["tomcat.version"] = "10.1.59"
+
+dependencyLocking {
+    lockAllConfigurations()
+}
+
+dependencies {
+    constraints {
+        implementation("at.yawk.lz4:lz4-java:1.14.0") {
+            because("Fixes CVE-2026-59949 in the kafka-clients transitive dependency")
+        }
+        implementation("org.xerial.snappy:snappy-java:1.1.10.12") {
+            because("Fixes CVE-2026-93451, CVE-2026-108106 and CVE-2026-116590 in kafka-clients")
+        }
+    }
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
+    implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.springframework.boot:spring-boot-starter-aop")
+    implementation("org.springframework.boot:spring-boot-starter-validation")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
+    implementation("org.jetbrains.kotlin:kotlin-reflect")
+
+    implementation("no.novari:flyt-gateway-starter:5.0.0")
+
+    runtimeOnly("io.micrometer:micrometer-registry-prometheus")
+    // Pinned to 8.x: 9.x pulls in Jackson 3 (tools.jackson), while Spring Boot 3.5 uses Jackson 2
+    runtimeOnly("net.logstash.logback:logstash-logback-encoder:8.1")
+
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.withType<KotlinCompile>().configureEach {
+    compilerOptions {
+        freeCompilerArgs.add("-Xjsr305=strict")
+    }
+}
+
+tasks.withType<Test> {
+    useJUnitPlatform()
+}
+
+tasks.named("check") {
+    dependsOn("ktlintCheck")
+}
+
+fun isNonStable(version: String): Boolean {
+    val stableKeyword = listOf("RELEASE", "FINAL", "GA").any { version.uppercase().contains(it) }
+    val regex = "^[0-9,.v-]+(-r)?$".toRegex()
+    val isStable = stableKeyword || regex.matches(version)
+    return !isStable
+}
+
+tasks.named<DependencyUpdatesTask>("dependencyUpdates") {
+    rejectVersionIf {
+        isNonStable(candidate.version)
+    }
+}
