@@ -3,7 +3,6 @@ fint:
 novari:
     flyt:
         file-service-url: http://localhost:8091
-        # Local fint-flyt-history-service and fint-flyt-authorization-service (see README).
         history-service-url: http://localhost:8083
         web-resource-server:
             security:
@@ -19,4 +18,4 @@ spring:
     kafka:
         bootstrap-servers: localhost:9092
 server:
-    port: 8199 # this should be changed to reflects this applications sourceapplication id. if the id is 9, the local port should be 8109
+    port: 8199
