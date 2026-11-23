@@ -1,15 +1,22 @@
 package no.novari.flyt.conexus.gateway
 
+import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import io.swagger.v3.oas.annotations.Operation
 import no.novari.flyt.conexus.gateway.instance.ConexusInstance
 import no.novari.flyt.conexus.gateway.instance.ConexusInstanceController
 import no.novari.flyt.conexus.gateway.instance.ConexusInstanceHandler
-import no.novari.flyt.conexus.gateway.metadata.ConexusMetadata
 import no.novari.flyt.conexus.gateway.metadata.ConexusMetadataController
-import no.novari.flyt.conexus.gateway.metadata.ConexusMetadataHandler
+import no.novari.flyt.conexus.gateway.metadata.ConexusMetadataMapper
+import no.novari.flyt.conexus.gateway.metadata.ConexusMetadataValidator
 import no.novari.flyt.gateway.instance.error.GlobalExceptionHandler
+import no.novari.flyt.gateway.metadata.IntegrationMetadataProcessor
+import no.novari.flyt.gateway.metadata.IntegrationMetadataProducerService
+import no.novari.flyt.gateway.metadata.model.InstanceValueMetadata
+import no.novari.flyt.gateway.metadata.model.IntegrationMetadata
+import no.novari.flyt.webresourceserver.security.client.sourceapplication.SourceApplicationAuthorizationService
 import org.hamcrest.Matchers.containsString
 import org.hamcrest.Matchers.not
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -19,6 +26,9 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.ValueSource
+import org.mockito.Mockito.mock
+import org.mockito.Mockito.verify
+import org.mockito.Mockito.`when`
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
@@ -43,20 +53,31 @@ class ConexusApiTest {
 
     private var processedAuthentication: Authentication? = null
     private var processedInstance: ConexusInstance? = null
-    private var processedMetadata: ConexusMetadata? = null
+    private var publishedMetadata: IntegrationMetadata? = null
     private val instanceHandler =
         ConexusInstanceHandler { auth, instance ->
             processedAuthentication = auth
             processedInstance = instance
             ResponseEntity.accepted().build()
         }
-    private val metadataHandler =
-        ConexusMetadataHandler { auth, metadata ->
-            processedAuthentication = auth
-            processedMetadata = metadata
-            ResponseEntity.accepted().build()
+    private val authorizationService =
+        mock(SourceApplicationAuthorizationService::class.java).also {
+            `when`(it.getSourceApplicationId(authentication)).thenReturn(117L)
         }
-    private val mvc = mvc(instanceHandler, metadataHandler)
+    private val metadataProducer =
+        mock(IntegrationMetadataProducerService::class.java) { invocation ->
+            if (invocation.method.name == "publishNewIntegrationMetadata") {
+                publishedMetadata = invocation.getArgument(0)
+            }
+            null
+        }
+    private val metadataController =
+        ConexusMetadataController(
+            IntegrationMetadataProcessor(metadataProducer, authorizationService),
+            ConexusMetadataMapper(),
+            ConexusMetadataValidator(),
+        )
+    private val mvc = mvc(instanceHandler)
 
     @Test
     fun `accepts an instance without title suggestions and preserves the identifier as supplied`() {
@@ -89,13 +110,32 @@ class ConexusApiTest {
     }
 
     @Test
-    fun `accepts metadata registration for a document type`() {
+    fun `publishes the documented metadata example with its version and Flyt keys`() {
+        val body = readMetadata()
+        (body["metadata"] as ObjectNode).put("version", 2L)
+
         mvc
-            .perform(jsonPost(METADATA, METADATA_BODY))
+            .perform(jsonPost(METADATA, body.toString()))
             .andExpect(status().isAccepted)
 
-        assertSame(authentication, processedAuthentication)
-        assertEquals(ConexusMetadata("kartlegging", "Arkivering av kartlegging"), processedMetadata)
+        verify(authorizationService).getSourceApplicationId(authentication)
+        val published = requireNotNull(publishedMetadata)
+        assertEquals(117L, published.sourceApplicationId)
+        assertEquals("kartlegging", published.sourceApplicationIntegrationId)
+        assertEquals("Arkivering av kartlegging", published.integrationDisplayName)
+        assertEquals(2L, published.version)
+        val fields = published.instanceMetadata.instanceValueMetadata
+        assertEquals(InstanceValueMetadata.Type.STRING, fields.single { it.key == "elevFnr" }.type)
+        assertEquals("Forslag til sakstittel", fields.single { it.key == "forslagSakstittel" }.displayName)
+        val document = published.instanceMetadata.categories.single()
+        assertEquals("Hoveddokument", document.displayName)
+        assertEquals(
+            InstanceValueMetadata.Type.FILE,
+            document.content.instanceValueMetadata
+                .single { it.key == "hovedDokumentFil" }
+                .type,
+        )
+        assertEquals(5, document.content.instanceValueMetadata.size)
     }
 
     @ParameterizedTest
@@ -185,17 +225,71 @@ class ConexusApiTest {
     }
 
     @ParameterizedTest
-    @CsvSource("{}, dokumenttype", "{}, integrationDisplayName", "{\"dokumenttype\":\" \"}, dokumenttype")
-    fun `rejects missing or blank metadata fields`(
-        body: String,
-        field: String,
-    ) {
-        mvc
-            .perform(jsonPost(METADATA, body))
-            .andExpect(status().isBadRequest)
-            .andExpect(jsonPath("$.message").value(containsString(field)))
+    @ValueSource(
+        strings = ["/metadata/dokumenttype", "/metadata/integrationDisplayName", "/metadata/version", "/elements"],
+    )
+    fun `rejects missing metadata properties`(pointer: String) {
+        val body = readMetadata()
+        (body.at(pointer.substringBeforeLast('/')) as ObjectNode).remove(pointer.substringAfterLast('/'))
 
-        assertNull(processedAuthentication)
+        mvc
+            .perform(jsonPost(METADATA, body.toString()))
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.message").value(containsString(pointer.substringAfterLast('/'))))
+
+        assertNull(publishedMetadata)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["0", "-1", "1.1", "null", "true", "\"2\""])
+    fun `rejects values other than positive integer versions`(value: String) {
+        val body = readMetadata()
+        (body["metadata"] as ObjectNode).replace("version", objectMapper.readTree(value))
+
+        mvc
+            .perform(jsonPost(METADATA, body.toString()))
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.message").value(containsString("version")))
+
+        assertNull(publishedMetadata)
+    }
+
+    @ParameterizedTest
+    @CsvSource(
+        "id, elevNavn, dupliserer",
+        "id, uavtalt, avtalt Flyt-nøkkel",
+        "type, File, må være String",
+        "required, false, instanskontrakten",
+    )
+    fun `rejects field definitions that conflict with the instance contract`(
+        name: String,
+        value: String,
+        error: String,
+    ) {
+        val body = readMetadata()
+        val element = body["elements"].single { it["id"].asText() == "elevFnr" } as ObjectNode
+        if (name == "required") element.put(name, value.toBooleanStrict()) else element.put(name, value)
+
+        mvc
+            .perform(jsonPost(METADATA, body.toString()))
+            .andExpect(status().isUnprocessableEntity)
+            .andExpect(jsonPath("$.message").value(containsString(error)))
+
+        assertNull(publishedMetadata)
+    }
+
+    @Test
+    fun `rejects publication of metadata without a required field`() {
+        val body = readMetadata()
+        val elements = body["elements"] as ArrayNode
+        elements.remove(elements.indexOfFirst { it["id"].asText() == "hovedDokumentFil" })
+
+        mvc
+            .perform(jsonPost(METADATA, body.toString()))
+            .andExpect(status().isUnprocessableEntity)
+            .andExpect(jsonPath("$.message").value(containsString("hovedDokumentFil")))
+
+        assertNull(publishedMetadata)
     }
 
     @Test
@@ -205,32 +299,38 @@ class ConexusApiTest {
                 throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Integrasjonen er deaktivert")
             }
 
-        mvc(rejectingHandler, metadataHandler)
+        mvc(rejectingHandler)
             .perform(jsonPost(INSTANCES, INSTANCE))
             .andExpect(status().isUnprocessableEntity)
             .andExpect(jsonPath("$.message").value("Integrasjonen er deaktivert"))
     }
 
-    @ParameterizedTest
-    @CsvSource("$INSTANCES, instance", "$METADATA, metadata")
-    fun `returns service unavailable when no handler can confirm receipt`(
-        path: String,
-        request: String,
-    ) {
-        val body = if (request == "instance") INSTANCE else METADATA_BODY
-
-        mvc(null, null)
-            .perform(jsonPost(path, body))
+    @Test
+    fun `returns service unavailable when no instance handler can confirm receipt`() {
+        mvc(null)
+            .perform(jsonPost(INSTANCES, INSTANCE))
             .andExpect(status().isServiceUnavailable)
     }
 
-    private fun mvc(
-        instanceHandler: ConexusInstanceHandler?,
-        metadataHandler: ConexusMetadataHandler?,
-    ) = standaloneSetup(ConexusInstanceController(instanceHandler), ConexusMetadataController(metadataHandler))
-        .setControllerAdvice(GlobalExceptionHandler())
-        .setMessageConverters(MappingJackson2HttpMessageConverter(objectMapper))
-        .build()
+    private fun mvc(instanceHandler: ConexusInstanceHandler?) =
+        standaloneSetup(ConexusInstanceController(instanceHandler), metadataController)
+            .setControllerAdvice(GlobalExceptionHandler())
+            .setMessageConverters(MappingJackson2HttpMessageConverter(objectMapper))
+            .build()
+
+    private fun readMetadata(): ObjectNode {
+        val operation =
+            ConexusMetadataController::class.java.declaredMethods
+                .single { it.name == "postMetadata" }
+                .getAnnotation(Operation::class.java)
+        return objectMapper.readTree(
+            operation.requestBody.content
+                .single()
+                .examples
+                .single()
+                .value,
+        ) as ObjectNode
+    }
 
     private fun readInstance() = objectMapper.readTree(INSTANCE) as ObjectNode
 
@@ -245,8 +345,6 @@ class ConexusApiTest {
     private companion object {
         private const val INSTANCES = "/api/conexus/instances"
         private const val METADATA = "/api/conexus/metadata"
-        private const val METADATA_BODY =
-            """{"dokumenttype":"kartlegging","integrationDisplayName":"Arkivering av kartlegging"}"""
         private const val INSTANCE = """
             {
               "dokumentId": "5a0d2892-9a48-4bef-ae6a-ef8f90bfbe42",
