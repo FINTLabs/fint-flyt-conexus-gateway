@@ -3,7 +3,6 @@
 # Docs: https://gh.io/actions-lockfile
 version: 'v0.0.3'
 workflows:
-    '.github/workflows/CD.yaml': []
     '.github/workflows/CI.yaml': []
     '.github/workflows/MD.yaml': []
     '.github/workflows/codeql.yaml': []
