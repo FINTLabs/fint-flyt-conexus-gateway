@@ -10,7 +10,6 @@ import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.NotEmpty
 import jakarta.validation.constraints.NotNull
-import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Positive
 import no.novari.flyt.conexus.gateway.JsonText
 
@@ -46,7 +45,6 @@ data class ConexusMetadataElement(
     val displayName: String? = null,
     @field:JsonText
     @field:NotNull(message = "Elementets type er påkrevd")
-    @field:Pattern(regexp = "String|File", message = "Elementets type må være String eller File")
     @field:Schema(allowableValues = ["String", "File"])
     val type: String? = null,
     @field:NotNull(message = "Elementets required er påkrevd")

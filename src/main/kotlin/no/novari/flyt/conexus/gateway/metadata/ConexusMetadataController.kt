@@ -9,8 +9,11 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse
 import io.swagger.v3.oas.annotations.security.SecurityRequirement
 import jakarta.validation.Valid
 import no.novari.flyt.conexus.gateway.BEARER_AUTH
-import no.novari.flyt.gateway.metadata.IntegrationMetadataProcessor
 import no.novari.flyt.webresourceserver.UrlPaths.EXTERNAL_API
+import no.novari.flyt.webresourceserver.UrlPaths.INTERNAL_CLIENT_API
+import no.novari.flyt.webresourceserver.security.client.sourceapplication.SourceApplicationAuthorizationService
+import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.Authentication
@@ -18,13 +21,18 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.client.HttpClientErrorException
+import org.springframework.web.client.RestClient
+import org.springframework.web.server.ResponseStatusException
 import io.swagger.v3.oas.annotations.parameters.RequestBody as OpenApiRequestBody
 
 @SecurityRequirement(name = BEARER_AUTH)
 @RestController
 @RequestMapping("$EXTERNAL_API/conexus/metadata")
 class ConexusMetadataController(
-    private val integrationMetadataProcessor: IntegrationMetadataProcessor,
+    @param:Qualifier("intgrConfRestClient")
+    private val catalog: RestClient,
+    private val sourceApplicationAuthorizationService: SourceApplicationAuthorizationService,
     private val mapper: ConexusMetadataMapper,
     private val validator: ConexusMetadataValidator,
 ) {
@@ -50,10 +58,11 @@ class ConexusMetadataController(
                 ],
             ),
         responses = [
-            ApiResponse(responseCode = "202", description = "Metadataregistreringen er akseptert for behandling."),
+            ApiResponse(responseCode = "202", description = "Metadataversjonen er registrert i Flyt."),
             ApiResponse(responseCode = "400", description = "Ugyldig JSON eller feltverdi."),
             ApiResponse(responseCode = "401", description = "Mangler gyldig tilgangstoken."),
             ApiResponse(responseCode = "403", description = "Kildeapplikasjonen har ikke tilgang."),
+            ApiResponse(responseCode = "409", description = "Metadataversjonen finnes allerede."),
             ApiResponse(responseCode = "422", description = "Feltene samsvarer ikke med instanskontrakten."),
         ],
     )
@@ -61,13 +70,31 @@ class ConexusMetadataController(
     fun postMetadata(
         @Valid @RequestBody metadata: ConexusMetadata,
         @Parameter(hidden = true) authentication: Authentication,
-    ): ResponseEntity<Void> =
-        integrationMetadataProcessor.processIntegrationMetadata(
-            authentication = authentication,
-            incomingMetadata = metadata,
-            integrationMetadataMapper = mapper,
-            integrationMetadataValidator = validator,
-        )
+    ): ResponseEntity<Void> {
+        validator.validate(metadata)?.let { errors ->
+            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, errors.joinToString("; "))
+        }
+
+        val sourceApplicationId = sourceApplicationAuthorizationService.getSourceApplicationId(authentication)
+        val integrationMetadata = mapper.toIntegrationMetadata(sourceApplicationId, metadata)
+
+        try {
+            catalog
+                .post()
+                .uri("$INTERNAL_CLIENT_API/metadata")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(integrationMetadata)
+                .retrieve()
+                .toBodilessEntity()
+        } catch (_: HttpClientErrorException.Conflict) {
+            throw ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Metadataversjon ${integrationMetadata.version} finnes allerede",
+            )
+        }
+
+        return ResponseEntity.accepted().build()
+    }
 
     private companion object {
         private const val METADATA_EXAMPLE = """

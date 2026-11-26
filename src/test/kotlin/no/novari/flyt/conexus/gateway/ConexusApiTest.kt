@@ -12,8 +12,6 @@ import no.novari.flyt.conexus.gateway.metadata.ConexusMetadataController
 import no.novari.flyt.conexus.gateway.metadata.ConexusMetadataMapper
 import no.novari.flyt.conexus.gateway.metadata.ConexusMetadataValidator
 import no.novari.flyt.gateway.instance.error.GlobalExceptionHandler
-import no.novari.flyt.gateway.metadata.IntegrationMetadataProcessor
-import no.novari.flyt.gateway.metadata.IntegrationMetadataProducerService
 import no.novari.flyt.gateway.metadata.model.InstanceValueMetadata
 import no.novari.flyt.gateway.metadata.model.IntegrationMetadata
 import no.novari.flyt.webresourceserver.security.client.sourceapplication.SourceApplicationAuthorizationService
@@ -29,17 +27,24 @@ import org.junit.jupiter.params.provider.ValueSource
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
+import org.springframework.http.HttpMethod
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter
+import org.springframework.mock.http.client.MockClientHttpRequest
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.Authentication
+import org.springframework.test.web.client.MockRestServiceServer
+import org.springframework.test.web.client.match.MockRestRequestMatchers.method
+import org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo
+import org.springframework.test.web.client.response.MockRestResponseCreators.withStatus
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.content
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup
+import org.springframework.web.client.RestClient
 import org.springframework.web.server.ResponseStatusException
 
 class ConexusApiTest {
@@ -53,7 +58,7 @@ class ConexusApiTest {
 
     private var processedAuthentication: Authentication? = null
     private var processedInstance: ConexusInstance? = null
-    private var publishedMetadata: IntegrationMetadata? = null
+    private var registeredMetadata: IntegrationMetadata? = null
     private val instanceHandler =
         ConexusInstanceHandler { auth, instance ->
             processedAuthentication = auth
@@ -64,16 +69,12 @@ class ConexusApiTest {
         mock(SourceApplicationAuthorizationService::class.java).also {
             `when`(it.getSourceApplicationId(authentication)).thenReturn(117L)
         }
-    private val metadataProducer =
-        mock(IntegrationMetadataProducerService::class.java) { invocation ->
-            if (invocation.method.name == "publishNewIntegrationMetadata") {
-                publishedMetadata = invocation.getArgument(0)
-            }
-            null
-        }
+    private val catalogBuilder = RestClient.builder().baseUrl("http://catalog")
+    private val catalog = MockRestServiceServer.bindTo(catalogBuilder).build()
     private val metadataController =
         ConexusMetadataController(
-            IntegrationMetadataProcessor(metadataProducer, authorizationService),
+            catalogBuilder.build(),
+            authorizationService,
             ConexusMetadataMapper(),
             ConexusMetadataValidator(),
         )
@@ -110,24 +111,26 @@ class ConexusApiTest {
     }
 
     @Test
-    fun `publishes the documented metadata example with its version and Flyt keys`() {
+    fun `registers the documented metadata example with its version and Flyt keys`() {
         val body = readMetadata()
         (body["metadata"] as ObjectNode).put("version", 2L)
+        expectRegistration(2, HttpStatus.CREATED)
 
         mvc
             .perform(jsonPost(METADATA, body.toString()))
             .andExpect(status().isAccepted)
 
+        catalog.verify()
         verify(authorizationService).getSourceApplicationId(authentication)
-        val published = requireNotNull(publishedMetadata)
-        assertEquals(117L, published.sourceApplicationId)
-        assertEquals("kartlegging", published.sourceApplicationIntegrationId)
-        assertEquals("Arkivering av kartlegging", published.integrationDisplayName)
-        assertEquals(2L, published.version)
-        val fields = published.instanceMetadata.instanceValueMetadata
+        val registered = requireNotNull(registeredMetadata)
+        assertEquals(117L, registered.sourceApplicationId)
+        assertEquals("kartlegging", registered.sourceApplicationIntegrationId)
+        assertEquals("Arkivering av kartlegging", registered.integrationDisplayName)
+        assertEquals(2L, registered.version)
+        val fields = registered.instanceMetadata.instanceValueMetadata
         assertEquals(InstanceValueMetadata.Type.STRING, fields.single { it.key == "elevFnr" }.type)
         assertEquals("Forslag til sakstittel", fields.single { it.key == "forslagSakstittel" }.displayName)
-        val document = published.instanceMetadata.categories.single()
+        val document = registered.instanceMetadata.categories.single()
         assertEquals("Hoveddokument", document.displayName)
         assertEquals(
             InstanceValueMetadata.Type.FILE,
@@ -136,6 +139,24 @@ class ConexusApiTest {
                 .type,
         )
         assertEquals(5, document.content.instanceValueMetadata.size)
+    }
+
+    @Test
+    fun `reports a duplicate version and accepts a new version`() {
+        expectRegistration(1, HttpStatus.CREATED)
+        expectRegistration(1, HttpStatus.CONFLICT)
+        expectRegistration(2, HttpStatus.CREATED)
+        val body = readMetadata()
+
+        mvc.perform(jsonPost(METADATA, body.toString())).andExpect(status().isAccepted)
+        mvc
+            .perform(jsonPost(METADATA, body.toString()))
+            .andExpect(status().isConflict)
+            .andExpect(jsonPath("$.message").value("Metadataversjon 1 finnes allerede"))
+
+        (body["metadata"] as ObjectNode).put("version", 2L)
+        mvc.perform(jsonPost(METADATA, body.toString())).andExpect(status().isAccepted)
+        catalog.verify()
     }
 
     @ParameterizedTest
@@ -226,7 +247,13 @@ class ConexusApiTest {
 
     @ParameterizedTest
     @ValueSource(
-        strings = ["/metadata/dokumenttype", "/metadata/integrationDisplayName", "/metadata/version", "/elements"],
+        strings = [
+            "/metadata/dokumenttype",
+            "/metadata/integrationDisplayName",
+            "/metadata/version",
+            "/elements",
+            "/elements/0/type",
+        ],
     )
     fun `rejects missing metadata properties`(pointer: String) {
         val body = readMetadata()
@@ -237,7 +264,7 @@ class ConexusApiTest {
             .andExpect(status().isBadRequest)
             .andExpect(jsonPath("$.message").value(containsString(pointer.substringAfterLast('/'))))
 
-        assertNull(publishedMetadata)
+        assertNull(registeredMetadata)
     }
 
     @ParameterizedTest
@@ -251,7 +278,7 @@ class ConexusApiTest {
             .andExpect(status().isBadRequest)
             .andExpect(jsonPath("$.message").value(containsString("version")))
 
-        assertNull(publishedMetadata)
+        assertNull(registeredMetadata)
     }
 
     @ParameterizedTest
@@ -259,6 +286,7 @@ class ConexusApiTest {
         "id, elevNavn, dupliserer",
         "id, uavtalt, avtalt Flyt-nøkkel",
         "type, File, må være String",
+        "type, Boolean, må være String",
         "required, false, instanskontrakten",
     )
     fun `rejects field definitions that conflict with the instance contract`(
@@ -275,7 +303,7 @@ class ConexusApiTest {
             .andExpect(status().isUnprocessableEntity)
             .andExpect(jsonPath("$.message").value(containsString(error)))
 
-        assertNull(publishedMetadata)
+        assertNull(registeredMetadata)
     }
 
     @Test
@@ -289,7 +317,7 @@ class ConexusApiTest {
             .andExpect(status().isUnprocessableEntity)
             .andExpect(jsonPath("$.message").value(containsString("hovedDokumentFil")))
 
-        assertNull(publishedMetadata)
+        assertNull(registeredMetadata)
     }
 
     @Test
@@ -317,6 +345,24 @@ class ConexusApiTest {
             .setControllerAdvice(GlobalExceptionHandler())
             .setMessageConverters(MappingJackson2HttpMessageConverter(objectMapper))
             .build()
+
+    private fun expectRegistration(
+        version: Long,
+        responseStatus: HttpStatus,
+    ) {
+        catalog
+            .expect(requestTo("http://catalog/api/intern-klient/metadata"))
+            .andExpect(method(HttpMethod.POST))
+            .andExpect { request ->
+                val metadata =
+                    objectMapper.readValue(
+                        (request as MockClientHttpRequest).bodyAsString,
+                        IntegrationMetadata::class.java,
+                    )
+                assertEquals(version, metadata.version)
+                registeredMetadata = metadata
+            }.andRespond(withStatus(responseStatus))
+    }
 
     private fun readMetadata(): ObjectNode {
         val operation =
