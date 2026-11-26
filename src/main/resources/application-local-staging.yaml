@@ -4,6 +4,7 @@ novari:
     flyt:
         file-service-url: http://localhost:8091
         history-service-url: http://localhost:8083
+        intgr-conf-service-url: http://localhost:8095
         web-resource-server:
             security:
                 authorization:
