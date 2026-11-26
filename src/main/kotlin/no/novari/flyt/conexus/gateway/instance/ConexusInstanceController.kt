@@ -9,8 +9,8 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse
 import io.swagger.v3.oas.annotations.security.SecurityRequirement
 import jakarta.validation.Valid
 import no.novari.flyt.conexus.gateway.BEARER_AUTH
+import no.novari.flyt.gateway.instance.InstanceProcessor
 import no.novari.flyt.webresourceserver.UrlPaths.EXTERNAL_API
-import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.Authentication
@@ -18,14 +18,13 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
-import org.springframework.web.server.ResponseStatusException
 import io.swagger.v3.oas.annotations.parameters.RequestBody as OpenApiRequestBody
 
 @SecurityRequirement(name = BEARER_AUTH)
 @RestController
 @RequestMapping("$EXTERNAL_API/conexus/instances")
 class ConexusInstanceController(
-    private val handler: ConexusInstanceHandler?,
+    private val instanceProcessor: InstanceProcessor<ConexusInstance>,
 ) {
     @Operation(
         summary = "Send inn et dokument til arkivering",
@@ -52,16 +51,14 @@ class ConexusInstanceController(
             ApiResponse(responseCode = "401", description = "Mangler gyldig tilgangstoken."),
             ApiResponse(responseCode = "403", description = "Kildeapplikasjonen har ikke tilgang."),
             ApiResponse(responseCode = "422", description = "Integrasjonen mangler eller er deaktivert."),
-            ApiResponse(responseCode = "503", description = "Instansbehandling er utilgjengelig."),
+            ApiResponse(responseCode = "500", description = "Filopplasting eller videresending feilet."),
         ],
     )
     @PostMapping(consumes = [MediaType.APPLICATION_JSON_VALUE])
     fun postInstance(
         @Valid @RequestBody instance: ConexusInstance,
         @Parameter(hidden = true) authentication: Authentication,
-    ): ResponseEntity<Void> =
-        handler?.process(authentication, instance)
-            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Instansbehandling er utilgjengelig")
+    ): ResponseEntity<Void> = instanceProcessor.processInstance(authentication, instance)
 
     private companion object {
         private const val INSTANCE_EXAMPLE = """
@@ -81,11 +78,4 @@ class ConexusInstanceController(
             }
         """
     }
-}
-
-fun interface ConexusInstanceHandler {
-    fun process(
-        authentication: Authentication,
-        instance: ConexusInstance,
-    ): ResponseEntity<Void>
 }

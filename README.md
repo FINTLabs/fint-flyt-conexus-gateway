@@ -22,7 +22,7 @@ docker compose up -d
 ./gradlew bootRun --args='--spring.profiles.active=local-staging'
 ```
 
-The local gateway uses port 8111. The `local-staging` profile defines the addresses for other Flyt services. For authenticated API calls, run the local authorization service and configure the Flyt OAuth clients and authorized source application ID. Metadata registration also requires the local integration configuration service on port 8095.
+The local gateway uses port 8111. The `local-staging` profile defines the addresses for other Flyt services. For authenticated API calls, run the local authorization service and configure the Flyt OAuth clients and authorized source application ID. Instance submission and metadata registration require the integration configuration service on port 8095. To submit an instance, configure an active integration for its `dokumenttype` and run the file service on port 8091 and Kafka on port 9092.
 
 ## Conexus API
 
@@ -33,7 +33,9 @@ The JSON endpoints use bearer authentication through the existing Flyt resource 
 
 The OpenAPI description is available at `/api/conexus/v3/api-docs`. Use the configured organisation prefix when calling the gateway externally.
 
-Both endpoints return `400` for invalid JSON or invalid request fields. Metadata returns `422` for invalid field definitions, such as duplicate IDs or unsupported types, and `409` if the version already exists for the integration. A new version returns `202` after registration in Flyt. A valid instance request returns `503` until its processing handler is wired up. The HTTP layer checks base64 encoding. PDF/A conformance and the maximum document size are separate contract decisions.
+Both endpoints return `400` for invalid JSON or invalid request fields. Metadata returns `422` for invalid field definitions, such as duplicate IDs or unsupported types, and `409` if the version already exists for the integration. A new version returns `202` after registration in Flyt.
+
+Instance submission returns `422` for an unknown or deactivated integration before uploading any file. The gateway uploads the main document to the file service, maps its file ID to `hovedDokumentFil` and publishes the instance to Flyt for asynchronous processing with `202 Accepted`. A failed upload gives `500`. The HTTP layer checks base64 encoding. PDF/A conformance and the maximum document size are separate contract decisions.
 
 ## Repository automation
 
