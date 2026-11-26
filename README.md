@@ -22,7 +22,7 @@ docker compose up -d
 ./gradlew bootRun --args='--spring.profiles.active=local-staging'
 ```
 
-The local gateway uses port 8199. The `local-staging` profile defines the addresses for other Flyt services. For authenticated API calls, run the local authorization service and configure the Flyt OAuth clients and authorized source application ID. Metadata registration also requires the local integration configuration service on port 8095.
+The local gateway uses port 8111. The `local-staging` profile defines the addresses for other Flyt services. For authenticated API calls, run the local authorization service and configure the Flyt OAuth clients and authorized source application ID. Metadata registration also requires the local integration configuration service on port 8095.
 
 ## Conexus API
 
