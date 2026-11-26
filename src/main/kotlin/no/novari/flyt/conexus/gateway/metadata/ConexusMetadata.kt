@@ -38,7 +38,7 @@ data class ConexusMetadataInfo(
 data class ConexusMetadataElement(
     @field:JsonText
     @field:NotBlank(message = "Elementets id er påkrevd og må ha en verdi")
-    @field:Schema(description = "Feltnøkkelen i Flyt fra Conexus-utkastet, for eksempel elevFnr.")
+    @field:Schema(description = "Unik feltnøkkel i metadatasettet. Conexus velger nøkkelen.")
     val id: String? = null,
     @field:JsonText
     @field:NotBlank(message = "Elementets displayName er påkrevd og må ha en verdi")
@@ -48,7 +48,7 @@ data class ConexusMetadataElement(
     @field:Schema(allowableValues = ["String", "File"])
     val type: String? = null,
     @field:NotNull(message = "Elementets required er påkrevd")
-    @field:Schema(description = "Om feltet er påkrevd i instanskontrakten.")
+    @field:Schema(description = "Conexus oppgir om verdien er påkrevd i sitt datasett.")
     val required: Boolean? = null,
 )
 

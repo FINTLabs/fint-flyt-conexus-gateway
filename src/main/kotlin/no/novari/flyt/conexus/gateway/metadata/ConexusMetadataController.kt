@@ -10,7 +10,6 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement
 import jakarta.validation.Valid
 import no.novari.flyt.conexus.gateway.BEARER_AUTH
 import no.novari.flyt.webresourceserver.UrlPaths.EXTERNAL_API
-import no.novari.flyt.webresourceserver.UrlPaths.INTERNAL_CLIENT_API
 import no.novari.flyt.webresourceserver.security.client.sourceapplication.SourceApplicationAuthorizationService
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.http.HttpStatus
@@ -37,10 +36,10 @@ class ConexusMetadataController(
     private val validator: ConexusMetadataValidator,
 ) {
     @Operation(
-        summary = "Registrer en dokumenttype som integrasjon i Flyt",
+        summary = "Registrer en ny metadataversjon for en dokumenttype",
         description =
-            "Bruk Flyt-nøklene fra Conexus-utkastet. Øk metadata.version når feltdefinisjonene endres. " +
-                "required beskriver hvilke verdier instanskontrakten krever.",
+            "Conexus definerer feltene. Send hele metadatasettet med en ny metadata.version når felter legges til, " +
+                "endres eller fjernes.",
         requestBody =
             OpenApiRequestBody(
                 required = true,
@@ -63,7 +62,8 @@ class ConexusMetadataController(
             ApiResponse(responseCode = "401", description = "Mangler gyldig tilgangstoken."),
             ApiResponse(responseCode = "403", description = "Kildeapplikasjonen har ikke tilgang."),
             ApiResponse(responseCode = "409", description = "Metadataversjonen finnes allerede."),
-            ApiResponse(responseCode = "422", description = "Feltene samsvarer ikke med instanskontrakten."),
+            ApiResponse(responseCode = "422", description = "Ugyldige feltdefinisjoner i metadatasettet."),
+            ApiResponse(responseCode = "502", description = "Flyt returnerte et uventet svar ved registrering."),
         ],
     )
     @PostMapping(consumes = [MediaType.APPLICATION_JSON_VALUE])
@@ -78,18 +78,26 @@ class ConexusMetadataController(
         val sourceApplicationId = sourceApplicationAuthorizationService.getSourceApplicationId(authentication)
         val integrationMetadata = mapper.toIntegrationMetadata(sourceApplicationId, metadata)
 
-        try {
-            catalog
-                .post()
-                .uri("$INTERNAL_CLIENT_API/metadata")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(integrationMetadata)
-                .retrieve()
-                .toBodilessEntity()
-        } catch (_: HttpClientErrorException.Conflict) {
+        val response =
+            try {
+                catalog
+                    .post()
+                    .uri("/metadata")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(integrationMetadata)
+                    .retrieve()
+                    .toBodilessEntity()
+            } catch (_: HttpClientErrorException.Conflict) {
+                throw ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Metadataversjon ${integrationMetadata.version} finnes allerede",
+                )
+            }
+
+        if (response.statusCode != HttpStatus.CREATED) {
             throw ResponseStatusException(
-                HttpStatus.CONFLICT,
-                "Metadataversjon ${integrationMetadata.version} finnes allerede",
+                HttpStatus.BAD_GATEWAY,
+                "Flyt bekreftet ikke lagring av metadataversjonen",
             )
         }
 

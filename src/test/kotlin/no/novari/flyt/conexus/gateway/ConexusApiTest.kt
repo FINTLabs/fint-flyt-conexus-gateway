@@ -69,7 +69,7 @@ class ConexusApiTest {
         mock(SourceApplicationAuthorizationService::class.java).also {
             `when`(it.getSourceApplicationId(authentication)).thenReturn(117L)
         }
-    private val catalogBuilder = RestClient.builder().baseUrl("http://catalog")
+    private val catalogBuilder = RestClient.builder().baseUrl("http://catalog/beta/innlandetfylke-no/api/intern-klient")
     private val catalog = MockRestServiceServer.bindTo(catalogBuilder).build()
     private val metadataController =
         ConexusMetadataController(
@@ -156,6 +156,17 @@ class ConexusApiTest {
 
         (body["metadata"] as ObjectNode).put("version", 2L)
         mvc.perform(jsonPost(METADATA, body.toString())).andExpect(status().isAccepted)
+        catalog.verify()
+    }
+
+    @Test
+    fun `does not accept metadata without confirmation of registration`() {
+        expectRegistration(1, HttpStatus.ACCEPTED)
+
+        mvc
+            .perform(jsonPost(METADATA, readMetadata().toString()))
+            .andExpect(status().isBadGateway)
+
         catalog.verify()
     }
 
@@ -284,19 +295,16 @@ class ConexusApiTest {
     @ParameterizedTest
     @CsvSource(
         "id, elevNavn, dupliserer",
-        "id, uavtalt, avtalt Flyt-nøkkel",
-        "type, File, må være String",
-        "type, Boolean, må være String",
-        "required, false, instanskontrakten",
+        "type, Boolean, må være String eller File",
     )
-    fun `rejects field definitions that conflict with the instance contract`(
+    fun `rejects duplicate field IDs and unsupported types`(
         name: String,
         value: String,
         error: String,
     ) {
         val body = readMetadata()
         val element = body["elements"].single { it["id"].asText() == "elevFnr" } as ObjectNode
-        if (name == "required") element.put(name, value.toBooleanStrict()) else element.put(name, value)
+        element.put(name, value)
 
         mvc
             .perform(jsonPost(METADATA, body.toString()))
@@ -307,17 +315,36 @@ class ConexusApiTest {
     }
 
     @Test
-    fun `rejects publication of metadata without a required field`() {
+    fun `registers a new version with Conexus-defined fields replacing an existing field`() {
         val body = readMetadata()
+        (body["metadata"] as ObjectNode).put("version", 2L)
         val elements = body["elements"] as ArrayNode
-        elements.remove(elements.indexOfFirst { it["id"].asText() == "hovedDokumentFil" })
+        elements.remove(elements.indexOfFirst { it["id"].asText() == "elevNavn" })
+        elements
+            .addObject()
+            .put("id", "elevFornavn")
+            .put("displayName", "Elevens fornavn")
+            .put("type", "String")
+            .put("required", true)
+        elements
+            .addObject()
+            .put("id", "elevEtternavn")
+            .put("displayName", "Elevens etternavn")
+            .put("type", "String")
+            .put("required", true)
+        val identifier = elements.single { it["id"].asText() == "elevFnr" } as ObjectNode
+        identifier.put("required", false)
+        expectRegistration(2, HttpStatus.CREATED)
 
         mvc
             .perform(jsonPost(METADATA, body.toString()))
-            .andExpect(status().isUnprocessableEntity)
-            .andExpect(jsonPath("$.message").value(containsString("hovedDokumentFil")))
+            .andExpect(status().isAccepted)
 
-        assertNull(registeredMetadata)
+        catalog.verify()
+        val fields = requireNotNull(registeredMetadata).instanceMetadata.instanceValueMetadata
+        assertNull(fields.find { it.key == "elevNavn" })
+        assertEquals("Elevens fornavn", fields.single { it.key == "elevFornavn" }.displayName)
+        assertEquals("Elevens etternavn", fields.single { it.key == "elevEtternavn" }.displayName)
     }
 
     @Test
@@ -351,7 +378,7 @@ class ConexusApiTest {
         responseStatus: HttpStatus,
     ) {
         catalog
-            .expect(requestTo("http://catalog/api/intern-klient/metadata"))
+            .expect(requestTo("http://catalog/beta/innlandetfylke-no/api/intern-klient/metadata"))
             .andExpect(method(HttpMethod.POST))
             .andExpect { request ->
                 val metadata =
