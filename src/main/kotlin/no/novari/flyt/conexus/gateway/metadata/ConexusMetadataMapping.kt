@@ -8,20 +8,14 @@ import no.novari.flyt.gateway.metadata.model.InstanceValueMetadata
 import no.novari.flyt.gateway.metadata.model.IntegrationMetadata
 import org.springframework.stereotype.Service
 
-private const val FILE_KEY = "hovedDokumentFil"
 private val MAIN_DOCUMENT_KEYS =
-    setOf("hovedDokumentTittel", "hovedDokumentDato", "hovedDokumentFilnavn", "hovedDokumentMediatype", FILE_KEY)
-private val REQUIRED_KEYS =
-    setOf("dokumentId", "dokumenttype", "elevFnr", "elevNavn", "elevId", "skoleOrgnr", "skoleNavn", "sakNokkel") +
-        MAIN_DOCUMENT_KEYS
-private val OPTIONAL_KEYS =
     setOf(
-        "forslagSakstittel",
-        "forslagOffentligSakstittel",
-        "forslagJournalposttittel",
-        "forslagOffentligJournalposttittel",
+        "hovedDokumentTittel",
+        "hovedDokumentDato",
+        "hovedDokumentFilnavn",
+        "hovedDokumentMediatype",
+        "hovedDokumentFil",
     )
-private val SUPPORTED_KEYS = REQUIRED_KEYS + OPTIONAL_KEYS
 
 @Service
 class ConexusMetadataMapper : IntegrationMetadataMapper<ConexusMetadata> {
@@ -45,12 +39,16 @@ class ConexusMetadataMapper : IntegrationMetadataMapper<ConexusMetadata> {
                 InstanceMetadataContent(
                     instanceValueMetadata = other,
                     categories =
-                        listOf(
-                            InstanceMetadataCategory(
-                                displayName = "Hoveddokument",
-                                content = InstanceMetadataContent(instanceValueMetadata = mainDocument),
-                            ),
-                        ),
+                        if (mainDocument.isEmpty()) {
+                            emptyList()
+                        } else {
+                            listOf(
+                                InstanceMetadataCategory(
+                                    displayName = "Hoveddokument",
+                                    content = InstanceMetadataContent(instanceValueMetadata = mainDocument),
+                                ),
+                            )
+                        },
                 ),
         )
     }
@@ -70,20 +68,16 @@ class ConexusMetadataValidator : IntegrationMetadataValidator<ConexusMetadata> {
         val errors =
             buildList {
                 incomingMetadata.elements.orEmpty().forEachIndexed { index, element ->
-                    val id = element?.id
-                    if (id == null || id !in SUPPORTED_KEYS) {
-                        add("elements[$index].id må være en avtalt Flyt-nøkkel")
-                    } else {
-                        if (!seen.add(id)) add("elements[$index].id dupliserer $id")
-                        if (element.required != (id in REQUIRED_KEYS)) {
-                            add("elements[$index].required samsvarer ikke med instanskontrakten for $id")
-                        }
-                        val expectedType = if (id == FILE_KEY) "File" else "String"
-                        if (element.type != expectedType) add("elements[$index].type må være $expectedType for $id")
+                    if (element == null) {
+                        add("elements[$index] må være en feltdefinisjon")
+                        return@forEachIndexed
+                    }
+                    val id = element.id
+                    if (id != null && !seen.add(id)) add("elements[$index].id dupliserer $id")
+                    if (element.type != "String" && element.type != "File") {
+                        add("elements[$index].type må være String eller File")
                     }
                 }
-                val missing = REQUIRED_KEYS - seen
-                if (missing.isNotEmpty()) add("elements mangler påkrevde felter: ${missing.joinToString()}")
             }
         return errors.takeIf { it.isNotEmpty() }
     }

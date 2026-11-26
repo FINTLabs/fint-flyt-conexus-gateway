@@ -36,10 +36,10 @@ class ConexusMetadataController(
     private val validator: ConexusMetadataValidator,
 ) {
     @Operation(
-        summary = "Registrer en dokumenttype som integrasjon i Flyt",
+        summary = "Registrer en ny metadataversjon for en dokumenttype",
         description =
-            "Bruk Flyt-nøklene fra Conexus-utkastet. Øk metadata.version når feltdefinisjonene endres. " +
-                "required beskriver hvilke verdier instanskontrakten krever.",
+            "Conexus definerer feltene. Send hele metadatasettet med en ny metadata.version når felter legges til, " +
+                "endres eller fjernes.",
         requestBody =
             OpenApiRequestBody(
                 required = true,
@@ -62,7 +62,7 @@ class ConexusMetadataController(
             ApiResponse(responseCode = "401", description = "Mangler gyldig tilgangstoken."),
             ApiResponse(responseCode = "403", description = "Kildeapplikasjonen har ikke tilgang."),
             ApiResponse(responseCode = "409", description = "Metadataversjonen finnes allerede."),
-            ApiResponse(responseCode = "422", description = "Feltene samsvarer ikke med instanskontrakten."),
+            ApiResponse(responseCode = "422", description = "Ugyldige feltdefinisjoner i metadatasettet."),
             ApiResponse(responseCode = "502", description = "Flyt returnerte et uventet svar ved registrering."),
         ],
     )

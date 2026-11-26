@@ -29,11 +29,11 @@ The local gateway uses port 8111. The `local-staging` profile defines the addres
 The JSON endpoints use bearer authentication through the existing Flyt resource server.
 
 - `POST /api/conexus/instances` accepts one document per instance using the grouped fields in Conexus API draft 0.2.
-- `POST /api/conexus/metadata` takes a `metadata` object with `dokumenttype`, `integrationDisplayName` and a positive integer `version`, plus an `elements` array. Each element specifies the Flyt key as `id`, a `displayName`, a `type` (`String` or `File`) and `required` according to the instance contract. Keep field IDs stable and increment the version when the definitions change. The gateway registers the metadata synchronously through the Flyt integration configuration service. The request and who submits it are subject to agreement with Conexus.
+- `POST /api/conexus/metadata` takes a `metadata` object with `dokumenttype`, `integrationDisplayName` and a positive integer `version`, plus an `elements` array. Conexus defines each field with a unique `id`, a `displayName`, a `type` (`String` or `File`) and a `required` flag. Submit the full dataset with a new version when adding, removing or changing fields. Keep IDs stable for fields you retain. The gateway registers metadata synchronously through the Flyt integration configuration service. Instance validation follows the instance API contract.
 
 The OpenAPI description is available at `/api/conexus/v3/api-docs`. Use the configured organisation prefix when calling the gateway externally.
 
-Both endpoints return `400` for invalid JSON or invalid request fields. Metadata returns `422` if the dataset conflicts with the instance contract and `409` if the version already exists for the integration. A new version returns `202` after registration in Flyt. A valid instance request returns `503` until its processing handler is wired up. The HTTP layer checks base64 encoding. PDF/A conformance and the maximum document size are separate contract decisions.
+Both endpoints return `400` for invalid JSON or invalid request fields. Metadata returns `422` for invalid field definitions, such as duplicate IDs or unsupported types, and `409` if the version already exists for the integration. A new version returns `202` after registration in Flyt. A valid instance request returns `503` until its processing handler is wired up. The HTTP layer checks base64 encoding. PDF/A conformance and the maximum document size are separate contract decisions.
 
 ## Repository automation
 
