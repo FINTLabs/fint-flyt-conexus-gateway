@@ -69,7 +69,7 @@ class ConexusApiTest {
         mock(SourceApplicationAuthorizationService::class.java).also {
             `when`(it.getSourceApplicationId(authentication)).thenReturn(117L)
         }
-    private val catalogBuilder = RestClient.builder().baseUrl("http://catalog")
+    private val catalogBuilder = RestClient.builder().baseUrl("http://catalog/beta/innlandetfylke-no/api/intern-klient")
     private val catalog = MockRestServiceServer.bindTo(catalogBuilder).build()
     private val metadataController =
         ConexusMetadataController(
@@ -156,6 +156,17 @@ class ConexusApiTest {
 
         (body["metadata"] as ObjectNode).put("version", 2L)
         mvc.perform(jsonPost(METADATA, body.toString())).andExpect(status().isAccepted)
+        catalog.verify()
+    }
+
+    @Test
+    fun `does not accept metadata without confirmation of registration`() {
+        expectRegistration(1, HttpStatus.ACCEPTED)
+
+        mvc
+            .perform(jsonPost(METADATA, readMetadata().toString()))
+            .andExpect(status().isBadGateway)
+
         catalog.verify()
     }
 
@@ -351,7 +362,7 @@ class ConexusApiTest {
         responseStatus: HttpStatus,
     ) {
         catalog
-            .expect(requestTo("http://catalog/api/intern-klient/metadata"))
+            .expect(requestTo("http://catalog/beta/innlandetfylke-no/api/intern-klient/metadata"))
             .andExpect(method(HttpMethod.POST))
             .andExpect { request ->
                 val metadata =
