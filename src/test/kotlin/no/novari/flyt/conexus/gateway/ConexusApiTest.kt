@@ -6,7 +6,9 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.swagger.v3.oas.annotations.Operation
 import no.novari.flyt.conexus.gateway.instance.ConexusInstanceController
+import no.novari.flyt.conexus.gateway.instance.ConexusInstanceMetadataValidator
 import no.novari.flyt.conexus.gateway.instance.ConexusInstanceProcessorConfiguration
+import no.novari.flyt.conexus.gateway.metadata.ConexusMetadata
 import no.novari.flyt.conexus.gateway.metadata.ConexusMetadataController
 import no.novari.flyt.conexus.gateway.metadata.ConexusMetadataMapper
 import no.novari.flyt.conexus.gateway.metadata.ConexusMetadataValidator
@@ -107,8 +109,14 @@ class ConexusApiTest {
             ConexusMetadataValidator(),
         )
     private val mvc =
-        standaloneSetup(ConexusInstanceController(instanceProcessor), metadataController)
-            .setControllerAdvice(GlobalExceptionHandler())
+        standaloneSetup(
+            ConexusInstanceController(
+                instanceProcessor,
+                ConexusInstanceMetadataValidator(catalogClient),
+                authorizationService,
+            ),
+            metadataController,
+        ).setControllerAdvice(GlobalExceptionHandler())
             .setMessageConverters(MappingJackson2HttpMessageConverter(objectMapper))
             .setValidator(validator)
             .build()
@@ -118,6 +126,7 @@ class ConexusApiTest {
 
     @Test
     fun `uploads the main document and sends the mapped instance with its source IDs`() {
+        expectMetadataLookup()
         expectIntegration()
         expectUpload()
 
@@ -156,16 +165,15 @@ class ConexusApiTest {
 
     @Test
     fun `accepts title suggestions when supplied`() {
+        expectMetadataLookup()
         expectIntegration()
         expectUpload()
         val body = readInstance()
-        (body["sak"] as ObjectNode)
-            .put("forslagTittel", "Eksempel på sakstittel")
-            .put("forslagOffentligTittel", "Offentlig sakstittel")
-        body
-            .putObject("journalpost")
-            .put("forslagTittel", "Eksempel på journalposttittel")
-            .put("forslagOffentligTittel", "Kartlegging")
+        (body["felter"] as ObjectNode)
+            .put("forslagSakstittel", "Eksempel på sakstittel")
+            .put("forslagOffentligSakstittel", "Offentlig sakstittel")
+            .put("forslagJournalposttittel", "Eksempel på journalposttittel")
+            .put("forslagOffentligJournalposttittel", "Kartlegging")
 
         mvc
             .perform(jsonPost(INSTANCES, body.toString()))
@@ -252,8 +260,7 @@ class ConexusApiTest {
     @ParameterizedTest
     @ValueSource(
         strings = [
-            "/dokumentId", "/dokumenttype", "/elev", "/elev/fnr", "/elev/navn", "/elev/elevId",
-            "/skole", "/skole/orgnr", "/skole/navn", "/sak", "/sak/nokkel", "/hoveddokument",
+            "/dokumentId", "/dokumenttype", "/metadataVersion", "/felter", "/hoveddokument",
             "/hoveddokument/tittel", "/hoveddokument/dato", "/hoveddokument/filnavn",
             "/hoveddokument/mediatype", "/hoveddokument/filBase64",
         ],
@@ -274,7 +281,6 @@ class ConexusApiTest {
     @CsvSource(
         "/dokumentId, private-not-a-uuid",
         "/dokumenttype, ' '",
-        "/skole/orgnr, 123",
         "/hoveddokument/dato, 2026-02-30",
         "/hoveddokument/dato, 2026-06-14T12:00:00",
         "/hoveddokument/mediatype, text/plain",
@@ -298,29 +304,122 @@ class ConexusApiTest {
     }
 
     @Test
-    fun `rejects a number where the JSON contract expects a string`() {
+    fun `rejects a number for a metadata field with type String before uploading`() {
         val instance = readInstance()
-        (instance["skole"] as ObjectNode).put("orgnr", 123456789)
+        (instance["felter"] as ObjectNode).put("skoleOrgnr", 123456789)
+        expectMetadataLookup()
 
         mvc
             .perform(jsonPost(INSTANCES, instance.toString()))
-            .andExpect(status().isBadRequest)
-            .andExpect(jsonPath("$.message").value(containsString("orgnr")))
+            .andExpect(status().isUnprocessableEntity)
+            .andExpect(jsonPath("$.message").value(containsString("felter.skoleOrgnr")))
             .andExpect(content().string(not(containsString("123456789"))))
 
+        catalog.verify()
         verifyNoInteractions(instanceProducer)
     }
 
     @Test
-    fun `rejects a null student identifier`() {
+    fun `rejects null as a String field value`() {
         val instance = readInstance()
-        (instance["elev"] as ObjectNode).putNull("fnr")
+        (instance["felter"] as ObjectNode).putNull("elevFnr")
+        expectMetadataLookup()
 
         mvc
             .perform(jsonPost(INSTANCES, instance.toString()))
-            .andExpect(status().isBadRequest)
-            .andExpect(jsonPath("$.message").value(containsString("elev.fnr")))
+            .andExpect(status().isUnprocessableEntity)
+            .andExpect(jsonPath("$.message").value(containsString("felter.elevFnr")))
 
+        catalog.verify()
+        verifyNoInteractions(instanceProducer)
+    }
+
+    @Test
+    fun `maps changed fields and the document reference to the latest metadata keys`() {
+        val metadata = metadataVersionTwo()
+        val elements = metadata["elements"] as ArrayNode
+        elements.remove(elements.indexOfFirst { it["id"].asText() == "hovedDokumentDato" })
+        val file = elements.single { it["id"].asText() == "hovedDokumentFil" } as ObjectNode
+        file.put("id", "arkivfil")
+        expectMetadataLookup(withSuccess(catalogMetadata(metadata), MediaType.APPLICATION_JSON))
+        expectIntegration()
+        expectUpload()
+
+        val body = readInstance().put("metadataVersion", 2)
+        val fields = body["felter"] as ObjectNode
+        fields.remove("elevNavn")
+        fields.put("elevFornavn", "Kari")
+        fields.put("elevEtternavn", "Nordmann")
+
+        mvc.perform(jsonPost(INSTANCES, body.toString())).andExpect(status().isAccepted)
+
+        catalog.verify()
+        files.verify()
+        val mapped = requireNotNull(publishedInstance).valuePerKey
+        assertEquals("Kari", mapped["elevFornavn"])
+        assertEquals("Nordmann", mapped["elevEtternavn"])
+        assertEquals(FILE_ID.toString(), mapped["arkivfil"])
+        assertNull(mapped["elevNavn"])
+        assertNull(mapped["hovedDokumentDato"])
+        assertNull(mapped["hovedDokumentFil"])
+    }
+
+    @Test
+    fun `rejects a field removed from the latest metadata version before uploading`() {
+        expectMetadataLookup(withSuccess(catalogMetadata(metadataVersionTwo()), MediaType.APPLICATION_JSON))
+
+        val body = readInstance().put("metadataVersion", 2)
+        mvc
+            .perform(jsonPost(INSTANCES, body.toString()))
+            .andExpect(status().isUnprocessableEntity)
+            .andExpect(jsonPath("$.message").value(containsString("felter.elevNavn")))
+
+        catalog.verify()
+        verifyNoInteractions(instanceProducer)
+    }
+
+    @Test
+    fun `rejects a metadata dataset without a File field before uploading`() {
+        val metadata = readMetadata()
+        val elements = metadata["elements"] as ArrayNode
+        elements.remove(elements.indexOfFirst { it["type"].asText() == "File" })
+        expectMetadataLookup(withSuccess(catalogMetadata(metadata), MediaType.APPLICATION_JSON))
+
+        mvc
+            .perform(jsonPost(INSTANCES, INSTANCE))
+            .andExpect(status().isUnprocessableEntity)
+            .andExpect(jsonPath("$.message").value(containsString("File-felt")))
+
+        catalog.verify()
+        verifyNoInteractions(instanceProducer)
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = [1, 3])
+    fun `rejects a metadata version other than the latest version before uploading`(version: Long) {
+        expectMetadataLookup(withSuccess(catalogMetadata(metadataVersionTwo()), MediaType.APPLICATION_JSON))
+        val body = readInstance().put("metadataVersion", version)
+
+        mvc
+            .perform(jsonPost(INSTANCES, body.toString()))
+            .andExpect(status().isConflict)
+            .andExpect(jsonPath("$.message").value(containsString("metadataVersion må være 2")))
+
+        catalog.verify()
+        verifyNoInteractions(instanceProducer)
+    }
+
+    @ParameterizedTest
+    @CsvSource("404, 422", "503, 502")
+    fun `rejects the instance when the latest metadata cannot be retrieved`(
+        catalogStatus: Int,
+        gatewayStatus: Int,
+    ) {
+        expectMetadataLookup(withStatus(HttpStatus.valueOf(catalogStatus)))
+
+        mvc.perform(jsonPost(INSTANCES, INSTANCE)).andExpect(status().`is`(gatewayStatus))
+
+        catalog.verify()
         verifyNoInteractions(instanceProducer)
     }
 
@@ -384,6 +483,21 @@ class ConexusApiTest {
 
     @Test
     fun `registers a new version with Conexus-defined fields replacing an existing field`() {
+        val body = metadataVersionTwo()
+        expectRegistration(2, HttpStatus.CREATED)
+
+        mvc
+            .perform(jsonPost(METADATA, body.toString()))
+            .andExpect(status().isAccepted)
+
+        catalog.verify()
+        val fields = requireNotNull(registeredMetadata).instanceMetadata.instanceValueMetadata
+        assertNull(fields.find { it.key == "elevNavn" })
+        assertEquals("Elevens fornavn", fields.single { it.key == "elevFornavn" }.displayName)
+        assertEquals("Elevens etternavn", fields.single { it.key == "elevEtternavn" }.displayName)
+    }
+
+    private fun metadataVersionTwo(): ObjectNode {
         val body = readMetadata()
         (body["metadata"] as ObjectNode).put("version", 2L)
         val elements = body["elements"] as ArrayNode
@@ -402,22 +516,13 @@ class ConexusApiTest {
             .put("required", true)
         val identifier = elements.single { it["id"].asText() == "elevFnr" } as ObjectNode
         identifier.put("required", false)
-        expectRegistration(2, HttpStatus.CREATED)
-
-        mvc
-            .perform(jsonPost(METADATA, body.toString()))
-            .andExpect(status().isAccepted)
-
-        catalog.verify()
-        val fields = requireNotNull(registeredMetadata).instanceMetadata.instanceValueMetadata
-        assertNull(fields.find { it.key == "elevNavn" })
-        assertEquals("Elevens fornavn", fields.single { it.key == "elevFornavn" }.displayName)
-        assertEquals("Elevens etternavn", fields.single { it.key == "elevEtternavn" }.displayName)
+        return body
     }
 
     @ParameterizedTest
     @ValueSource(booleans = [true, false])
     fun `rejects missing or deactivated integrations before uploading the file`(missing: Boolean) {
+        expectMetadataLookup()
         val response =
             if (missing) {
                 withStatus(HttpStatus.NOT_FOUND)
@@ -437,6 +542,7 @@ class ConexusApiTest {
 
     @Test
     fun `returns a safe error and forwards no instance when the file upload fails`() {
+        expectMetadataLookup()
         expectIntegration()
         expectUpload(
             withStatus(HttpStatus.SERVICE_UNAVAILABLE)
@@ -454,6 +560,28 @@ class ConexusApiTest {
         catalog.verify()
         files.verify()
         verifyNoInteractions(instanceProducer)
+    }
+
+    private fun expectMetadataLookup(
+        response: ResponseCreator = withSuccess(catalogMetadata(readMetadata()), MediaType.APPLICATION_JSON),
+    ) {
+        val url =
+            "http://catalog/beta/innlandetfylke-no/api/intern-klient/metadata" +
+                "?sourceApplicationId=117&sourceApplicationIntegrationId=kartlegging"
+        catalog
+            .expect(requestTo(url))
+            .andExpect(method(HttpMethod.GET))
+            .andRespond(response)
+    }
+
+    private fun catalogMetadata(body: ObjectNode): String {
+        val request = objectMapper.treeToValue(body, ConexusMetadata::class.java)
+        val metadata = ConexusMetadataMapper().toIntegrationMetadata(117, request)
+        return objectMapper
+            .valueToTree<ObjectNode>(metadata)
+            .put("id", 81L)
+            .put("createdAt", "2026-11-27T08:00:00Z")
+            .toString()
     }
 
     private fun expectIntegration(
@@ -537,9 +665,15 @@ class ConexusApiTest {
             {
               "dokumentId": "$DOCUMENT_ID",
               "dokumenttype": "kartlegging",
-              "elev": {"fnr": "CONEXUS-TEST-ID", "navn": "Test Elev", "elevId": "134"},
-              "skole": {"orgnr": "012345678", "navn": "Testskolen"},
-              "sak": {"nokkel": "test-012345678-134"},
+              "metadataVersion": 1,
+              "felter": {
+                "elevFnr": "CONEXUS-TEST-ID",
+                "elevNavn": "Test Elev",
+                "elevId": "134",
+                "skoleOrgnr": "012345678",
+                "skoleNavn": "Testskolen",
+                "sakNokkel": "test-012345678-134"
+              },
               "hoveddokument": {
                 "tittel": "Kartlegging",
                 "dato": "2026-06-14",

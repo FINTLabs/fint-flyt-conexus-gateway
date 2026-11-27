@@ -8,10 +8,12 @@ import org.springframework.context.annotation.Configuration
 @Configuration(proxyBeanMethods = false)
 class ConexusInstanceProcessorConfiguration {
     @Bean
-    fun conexusInstanceProcessor(factory: InstanceProcessorFactoryService): InstanceProcessor<ConexusInstance> =
+    fun conexusInstanceProcessor(
+        factory: InstanceProcessorFactoryService,
+    ): InstanceProcessor<ValidatedConexusInstance> =
         factory.createInstanceProcessor(
-            sourceApplicationIntegrationIdFunction = { requireNotNull(it.dokumenttype) },
-            sourceApplicationInstanceIdFunction = { requireNotNull(it.dokumentId) },
+            sourceApplicationIntegrationIdFunction = { requireNotNull(it.request.dokumenttype) },
+            sourceApplicationInstanceIdFunction = { requireNotNull(it.request.dokumentId) },
             instanceMapper = ConexusInstanceMapper(),
         )
 }
