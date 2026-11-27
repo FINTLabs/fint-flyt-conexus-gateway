@@ -9,8 +9,6 @@ novari:
             security:
                 authorization:
                     base-url: http://localhost:8086
-        gateway-starter:
-            check-integration-exists: false
     kafka:
         default-replicas: 1
         topic:
