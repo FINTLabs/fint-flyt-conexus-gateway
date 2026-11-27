@@ -260,7 +260,7 @@ class ConexusApiTest {
     @ParameterizedTest
     @ValueSource(
         strings = [
-            "/dokumentId", "/dokumenttype", "/metadataVersion", "/felter", "/hoveddokument",
+            "/dokumentId", "/dokumenttype", "/metadataVersion", "/hoveddokument",
             "/hoveddokument/tittel", "/hoveddokument/dato", "/hoveddokument/filnavn",
             "/hoveddokument/mediatype", "/hoveddokument/filBase64",
         ],
@@ -273,6 +273,20 @@ class ConexusApiTest {
             .perform(jsonPost(INSTANCES, instance.toString()))
             .andExpect(status().isBadRequest)
             .andExpect(jsonPath("$.message").value(containsString(pointer.drop(1).replace('/', '.'))))
+
+        verifyNoInteractions(instanceProducer)
+    }
+
+    @Test
+    fun `explains how to submit field values when felter is missing`() {
+        val instance = readInstance()
+        instance.remove("felter")
+
+        mvc
+            .perform(jsonPost(INSTANCES, instance.toString()))
+            .andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.message").value(containsString("felter er påkrevd")))
+            .andExpect(jsonPath("$.message").value(containsString("felt-ID-ene fra metadata som nøkler")))
 
         verifyNoInteractions(instanceProducer)
     }
@@ -300,22 +314,6 @@ class ConexusApiTest {
             .andExpect(jsonPath("$.message").value(containsString(pointer.drop(1).replace('/', '.'))))
             .andExpect(content().string(not(containsString("private-not"))))
 
-        verifyNoInteractions(instanceProducer)
-    }
-
-    @Test
-    fun `rejects a number for a metadata field with type String before uploading`() {
-        val instance = readInstance()
-        (instance["felter"] as ObjectNode).put("skoleOrgnr", 123456789)
-        expectMetadataLookup()
-
-        mvc
-            .perform(jsonPost(INSTANCES, instance.toString()))
-            .andExpect(status().isUnprocessableEntity)
-            .andExpect(jsonPath("$.message").value(containsString("felter.skoleOrgnr")))
-            .andExpect(content().string(not(containsString("123456789"))))
-
-        catalog.verify()
         verifyNoInteractions(instanceProducer)
     }
 
@@ -365,14 +363,17 @@ class ConexusApiTest {
     }
 
     @Test
-    fun `rejects a field removed from the latest metadata version before uploading`() {
+    fun `reports removed fields and type errors together before uploading`() {
         expectMetadataLookup(withSuccess(catalogMetadata(metadataVersionTwo()), MediaType.APPLICATION_JSON))
 
         val body = readInstance().put("metadataVersion", 2)
+        (body["felter"] as ObjectNode).put("skoleOrgnr", 123456789)
         mvc
             .perform(jsonPost(INSTANCES, body.toString()))
             .andExpect(status().isUnprocessableEntity)
-            .andExpect(jsonPath("$.message").value(containsString("felter.elevNavn")))
+            .andExpect(jsonPath("$.message").value(containsString("felter.elevNavn finnes ikke")))
+            .andExpect(jsonPath("$.message").value(containsString("felter.skoleOrgnr må være en tekstverdi")))
+            .andExpect(content().string(not(containsString("123456789"))))
 
         catalog.verify()
         verifyNoInteractions(instanceProducer)
