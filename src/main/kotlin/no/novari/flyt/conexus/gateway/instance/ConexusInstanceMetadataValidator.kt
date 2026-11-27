@@ -50,20 +50,27 @@ class ConexusInstanceMetadataValidator(
                 "hovedDokumentFilnavn" to requireNotNull(document.filnavn),
                 "hovedDokumentMediatype" to requireNotNull(document.mediatype),
             )
+        val fieldErrors = mutableListOf<String>()
         val values =
             buildMap {
                 requireNotNull(instance.felter).forEach { (key, value) ->
-                    put(key, validateValue(key, value, typesByKey[key]))
+                    val error = fieldError(key, value, typesByKey[key])
+                    if (error == null) {
+                        put(key, requireNotNull(value).asText())
+                    } else {
+                        fieldErrors.add(error)
+                    }
                 }
                 envelopeValues.forEach { (key, value) ->
                     val type = typesByKey[key] ?: return@forEach
                     if (type != Type.STRING) invalidFields("Metadatafeltet $key må ha typen String")
                     val submitted = put(key, value)
                     if (submitted != null && submitted != value) {
-                        invalidFields("felter.$key må samsvare med verdien i instansen")
+                        fieldErrors.add("felter.$key må samsvare med verdien i instansen")
                     }
                 }
             }
+        if (fieldErrors.isNotEmpty()) invalidFields(fieldErrors.joinToString(". "))
 
         return ValidatedConexusInstance(instance, values, fileKey)
     }
@@ -92,24 +99,16 @@ class ConexusInstanceMetadataValidator(
     private fun InstanceMetadataContent.valueFields(): List<InstanceValueMetadata> =
         instanceValueMetadata + categories.flatMap { it.content.valueFields() }
 
-    private fun validateValue(
+    private fun fieldError(
         key: String,
         value: JsonNode?,
         type: Type?,
-    ): String =
+    ): String? =
         when (type) {
-            Type.STRING -> {
-                if (value?.isTextual != true) invalidFields("felter.$key må være en tekstverdi")
-                value.textValue()
-            }
-
-            Type.BOOLEAN -> {
-                if (value?.isBoolean != true) invalidFields("felter.$key må være true eller false")
-                value.asText()
-            }
-
-            Type.FILE -> invalidFields("felter.$key må sendes i hoveddokument")
-            null -> invalidFields("felter.$key finnes ikke i siste metadataversjon")
+            Type.STRING -> if (value?.isTextual == true) null else "felter.$key må være en tekstverdi"
+            Type.BOOLEAN -> if (value?.isBoolean == true) null else "felter.$key må være true eller false"
+            Type.FILE -> "felter.$key må sendes i hoveddokument"
+            null -> "felter.$key finnes ikke i siste metadataversjon"
         }
 
     private fun invalidFields(message: String): Nothing =

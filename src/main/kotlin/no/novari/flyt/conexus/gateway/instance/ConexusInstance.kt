@@ -32,7 +32,9 @@ data class ConexusInstance(
     @field:NotNull(message = "metadataVersion er påkrevd")
     @field:Positive(message = "metadataVersion må være et positivt heltall")
     val metadataVersion: Long? = null,
-    @field:NotNull(message = "felter er påkrevd")
+    @field:NotNull(
+        message = "felter er påkrevd. Send feltverdiene i et JSON-objekt med felt-ID-ene fra metadata som nøkler.",
+    )
     @field:Schema(description = "Feltverdier med ID-er fra siste metadataversjon.")
     val felter: Map<String, JsonNode?>? = null,
     @field:Valid
